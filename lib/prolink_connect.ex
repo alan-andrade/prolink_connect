@@ -42,30 +42,21 @@ defmodule ProlinkConnect do
     end
 
     def parse_keep_alive(
-          <<name::binary-size(20), 0x1, remainder, length::binary-size(2), packet_count,
-            device_type, mac::binary-size(6), ip::binary-size(4), rest::binary>>
+          <<name::binary-size(20), 0x1, _remainder, length::binary-size(2), _packet_count,
+            device_type, mac::binary-size(6), ip::binary-size(4), _rest::binary>>
         ) do
       Device.new(name, device_type, ip)
     end
 
     def create_keep_alive(mac, ip) do
-      <<
-        @header,
-        0x06,
-        0x00,
-        "HELLO SEAHORSE CDJ..",
-        0x01,
-        0x02,
-        0x00,
-        0x36,
-        0x00,
-        # device number
-        # 0x04,
-        0x01
-      >> <>
-        mac <>
-        ip <>
-        <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>
+      p = @header
+      p = [p | <<0x6, 0x0>>]
+      p = [p | "HELLO SEAHORSE CDJ.."]
+      p = [p | <<0x01, 0x02, 0x00, 0x36, 0x00, 0x01>>]
+      p = [p | mac]
+      p = [p | ip]
+      p = [p | <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>]
+      p
     end
   end
 
@@ -146,44 +137,32 @@ defmodule ProlinkConnect do
 
     def handle_call(:query, _from, state), do: {:reply, state, state}
 
-    def handle_cast({:receive_packet, {:keep_alive, device}}, state) do
-      new_state =
-        Map.update(
-          state,
-          device.ip,
-          device,
-          &%{&1 | last_received: Time.utc_now()}
-        )
+    def handle_info({:udp, socket, _ip, _port, packet}, state) do
+      with {:keep_alive, device} <- Packet.parse(packet) do
+        new_state =
+          Map.update(
+            state,
+            device.ip,
+            device,
+            &%{&1 | last_received: Time.utc_now()}
+          )
 
-      {:noreply, new_state}
+        {:noreply, new_state}
+      else
+        _ ->
+          IO.puts("not implemented packet reception")
+          {:noreply, state}
+      end
     end
 
     def query, do: GenServer.call(__MODULE__, :query)
-    def receive_packet(packet), do: GenServer.cast(__MODULE__, {:receive_packet, packet})
-  end
-
-  defmodule NetworkListener do
-    def start(socket) do
-      pid = spawn_link(NetworkListener, :read, [])
-      socket |> Socket.set_controlling_process(pid)
-    end
-
-    def read() do
-      receive do
-        {_udp, socket, _ip, _port, packet} ->
-          DeviceFinder.receive_packet(Packet.parse(packet))
-      end
-
-      read()
-    end
   end
 
   def start() do
-    DeviceFinder.start_link()
-
     socket = Socket.open(50_000)
-    NetworkListener.start(socket)
-    VCDJ.start_link(%{iface: 'en4', socket: socket})
+    {:ok, finder} = DeviceFinder.start_link()
+    socket |> Socket.set_controlling_process(finder)
+    VCDJ.start_link(%{iface: 'en0', socket: socket})
     VCDJ.connect()
     query_loop()
   end
