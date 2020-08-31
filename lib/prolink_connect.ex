@@ -1,143 +1,196 @@
 defmodule ProlinkConnect do
-  alias ProlinkConnect.{Finder, CastKeepAlive, DeviceStatus}
-  require Logger
-
-  # Finder / Scanner
-  #   Scans the 50_000 for udp packets and finds connected devices.
-  #   Reports back with status
-  # Devices
-  #   Keeps track of connected devices via message passing from the scanner.
-  # VCDJ
-  #   Bind to 50_002 so you can start listening to incoming packets
-  #   Send keep alive packets to 50_000
-
-  def start(iface_name) when is_list(iface_name) do
-    iface_name |> find_iface |> start
-  end
-
-  def start(iface) do
-    finder = spawn_link(Finder, :start, [])
-  end
-
-  defp find_iface(iface_name) do
-    {:ok, ifaces} = :inet.getifaddrs()
-
-    Enum.filter(ifaces, fn {name, opts} ->
-      name == iface_name
-    end)
-    |> List.first()
-  end
-end
-
-defmodule Device do
-  defstruct [:name, :number, :ip]
-
-  def new(name, number, ip) do
-    %__MODULE__{name: name, number: number, ip: ip}
-  end
-end
-
-defmodule ProlinkConnect.Finder do
-  require Logger
-
-  defmodule Listener do
-    def listen(finder) do
-      device_data =
-        receive do
-          {_udp, _socket, _ip, _port, packet} -> parse_packet(packet)
-          {:error, error} -> Logger.info("error: #{error}")
-        after
-          2000 ->
-            Logger.warn("No CDJs in network...")
-        end
-
-      send(finder, device_data)
-      listen(finder)
+  defmodule Socket do
+    def open(port) do
+      {:ok, socket} = :gen_udp.open(port, [:binary, {:broadcast, true}, {:dontroute, true}])
+      socket
     end
 
-    @header_bytes <<0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6D, 0x4A, 0x4F, 0x4C>>
-    def parse_packet(
-          <<@header_bytes, 0x06, 0x00, device_name::binary-size(20), 0x01, 0x02,
-            packet_length::binary-size(2), device_number, device_type,
-            mac_address::binary-size(6), ip_address::binary-size(4), rest::binary>>
+    def send(socket, host, port, packet) do
+      :gen_udp.send(socket, host, port, packet)
+    end
+
+    def set_controlling_process(socket, pid) do
+      :gen_udp.controlling_process(socket, pid)
+    end
+  end
+
+  defmodule Device do
+    defstruct [:name, :ip, :device_type, :last_received]
+
+    def new(name, type, ip) do
+      %__MODULE__{
+        name: name |> to_charlist |> Enum.filter(&(&1 != 0)) |> to_string,
+        ip: ip,
+        device_type: type,
+        last_received: Time.utc_now()
+      }
+    end
+  end
+
+  defmodule Packet do
+    @header <<0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6D, 0x4A, 0x4F, 0x4C>>
+
+    def parse(<<@header, packet_type, 0x0, rest::binary>>) do
+      case packet_type do
+        0x6 -> {:keep_alive, rest |> parse_keep_alive}
+        _ -> {:not_implemented}
+      end
+    end
+
+    def parse(data) do
+      {:error, :packet_unkown}
+    end
+
+    def parse_keep_alive(
+          <<name::binary-size(20), 0x1, remainder, length::binary-size(2), packet_count,
+            device_type, mac::binary-size(6), ip::binary-size(4), rest::binary>>
         ) do
-      {:keep_alive, Device.new(device_name, device_number, ip_address)}
+      Device.new(name, device_type, ip)
     end
 
-    def parse_packet() do
-      Logger.info("Unkown packet")
+    def create_keep_alive(mac, ip) do
+      <<
+        @header,
+        0x06,
+        0x00,
+        "HELLO SEAHORSE CDJ..",
+        0x01,
+        0x02,
+        0x00,
+        0x36,
+        0x00,
+        # device number
+        # 0x04,
+        0x01
+      >> <>
+        mac <>
+        ip <>
+        <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>
     end
   end
 
-  def start do
-    open_socket |> listen
-    receive_msg
-  end
-
-  defp receive_msg do
-    receive do
-      msg -> Logger.info("#{msg}")
+  defmodule Iface do
+    def find(name) do
+      {:ok, interfaces} = :inet.getifaddrs()
+      interfaces |> Enum.filter(fn {iname, opts} -> iname == name end) |> List.first()
     end
 
-    receive_msg
+    def broadcast_addr({name, opts}) do
+      opts[:broadaddr]
+    end
+
+    def hwaddr({name, opts}) do
+      opts[:hwaddr]
+      |> Enum.map(&(&1 |> :binary.encode_unsigned()))
+      |> Enum.join()
+    end
+
+    def ipv4addr({name, opts}) do
+      Keyword.get_values(opts, :addr)
+      |> List.last()
+      |> Tuple.to_list()
+      |> Enum.map(&(&1 |> :binary.encode_unsigned()))
+      |> Enum.join()
+    end
   end
 
-  defp open_socket do
-    {:ok, socket} = :gen_udp.open(50_000, [:binary])
-    socket
-  end
+  defmodule VCDJ do
+    use GenServer
 
-  defp listen(socket) do
-    :gen_udp.controlling_process(socket, spawn_link(Listener, :listen, [self()]))
-    socket
-  end
-end
+    def init(state), do: {:ok, state}
 
-defmodule ProlinkConnect.CastKeepAlive do
-  @header_bytes <<0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6D, 0x4A, 0x4F, 0x4C>>
+    def start_link(state \\ %{}) do
+      GenServer.start_link(__MODULE__, state, name: __MODULE__)
+    end
 
-  def broadcast(socket, iface) do
-    {_name, opts} = iface
-
-    packet_t =
-      packet(
-        opts[:hwaddr]
-        |> Enum.map(&(&1 |> :binary.encode_unsigned()))
-        |> Enum.join(),
-        Keyword.get_values(opts, :addr)
-        |> List.last()
-        |> Tuple.to_list()
-        |> Enum.map(&(&1 |> :binary.encode_unsigned()))
-        |> Enum.join()
-      )
-
-    :ok =
-      :gen_udp.send(
-        socket,
-        opts[:broadaddr],
+    def handle_cast(:connect, state) do
+      Socket.send(
+        state.socket,
+        get_destination(state.iface),
         50_000,
-        packet_t
+        create_packet(state.iface)
       )
 
-    Process.sleep(1500)
-    broadcast(socket, iface)
+      Process.send_after(self(), :send_keep_alive, 500)
+      {:noreply, state}
+    end
+
+    def handle_info(:send_keep_alive, state) do
+      __MODULE__.connect()
+      {:noreply, state}
+    end
+
+    def connect, do: GenServer.cast(__MODULE__, :connect)
+
+    defp get_destination(iface) do
+      Iface.find(iface) |> Iface.broadcast_addr()
+    end
+
+    defp create_packet(iface) do
+      iface = Iface.find(iface)
+      mac = Iface.hwaddr(iface)
+      ip = Iface.ipv4addr(iface)
+
+      Packet.create_keep_alive(mac, ip)
+    end
   end
 
-  defp packet(mac, ip) when is_binary(mac) and is_binary(ip) do
-    <<
-      @header_bytes,
-      0x06,
-      0x00,
-      "HELLO SEAHORSE CDJ 12",
-      0x01,
-      0x02,
-      0x36,
-      # channel
-      0x04,
-      0x01
-    >> <>
-      mac <>
-      ip <>
-      <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>
+  defmodule DeviceFinder do
+    use GenServer
+
+    def init(state), do: {:ok, state}
+
+    def start_link(state \\ %{}) do
+      GenServer.start_link(__MODULE__, state, name: __MODULE__)
+    end
+
+    def handle_call(:query, _from, state), do: {:reply, state, state}
+
+    def handle_cast({:receive_packet, {:keep_alive, device}}, state) do
+      new_state =
+        Map.update(
+          state,
+          device.ip,
+          device,
+          &%{&1 | last_received: Time.utc_now()}
+        )
+
+      {:noreply, new_state}
+    end
+
+    def query, do: GenServer.call(__MODULE__, :query)
+    def receive_packet(packet), do: GenServer.cast(__MODULE__, {:receive_packet, packet})
+  end
+
+  defmodule NetworkListener do
+    def start(socket) do
+      pid = spawn_link(NetworkListener, :read, [])
+      socket |> Socket.set_controlling_process(pid)
+    end
+
+    def read() do
+      receive do
+        {_udp, socket, _ip, _port, packet} ->
+          DeviceFinder.receive_packet(Packet.parse(packet))
+      end
+
+      read()
+    end
+  end
+
+  def start() do
+    DeviceFinder.start_link()
+
+    socket = Socket.open(50_000)
+    NetworkListener.start(socket)
+    VCDJ.start_link(%{iface: 'en4', socket: socket})
+    VCDJ.connect()
+    query_loop()
+  end
+
+  def query_loop do
+    IO.inspect(DeviceFinder.query())
+    Process.sleep(1500)
+    query_loop()
   end
 end
