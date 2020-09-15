@@ -102,12 +102,17 @@ defmodule ProlinkConnect do
         create_packet(state.iface)
       )
 
-      Process.send_after(self(), :send_keep_alive, 500)
+      Process.send_after(self(), :send_keep_alive, 1_000)
       {:noreply, state}
     end
 
     def handle_info(:send_keep_alive, state) do
       __MODULE__.connect()
+      {:noreply, state}
+    end
+
+    def handle_info({:udp, socket, _ip, _port, packet}, state) do
+      IO.inspect(packet)
       {:noreply, state}
     end
 
@@ -162,8 +167,13 @@ defmodule ProlinkConnect do
     socket = Socket.open(50_000)
     {:ok, finder} = DeviceFinder.start_link()
     socket |> Socket.set_controlling_process(finder)
-    VCDJ.start_link(%{iface: 'en0', socket: socket})
+
+    {:ok, vcdj} = VCDJ.start_link(%{iface: 'en4', socket: socket})
     VCDJ.connect()
+
+    socket_2 = Socket.open(50_002)
+    socket_2 |> Socket.set_controlling_process(vcdj)
+
     query_loop()
   end
 
