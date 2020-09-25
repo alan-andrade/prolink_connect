@@ -1,42 +1,20 @@
 defmodule ProlinkConnect do
+  use GenServer
+
   defmodule Socket do
-    use GenServer
-
-    def init(state), do: {:ok, state}
-
-    def start_link(port) do
-      {:ok, socket} =
-        :gen_udp.open(port, [:binary, {:broadcast, true}, {:dontroute, true}, {:active, false}])
-
-      GenServer.start_link(__MODULE__, %{socket: socket, port: port})
+    def open(port) do
+      :gen_udp.open(port, [:binary, {:broadcast, true}, {:dontroute, true}, {:active, false}])
     end
 
-    def handle_cast({:send, host, port, packet}, state) do
-      :gen_udp.send(state.socket, host, port, packet)
-      {:noreply, state}
+    def send(socket, host, port, packet) do
+      :gen_udp.send(socket, host, port, packet)
     end
 
-    def handle_call(:read, _from, state) do
-      case :gen_udp.recv(state.socket, 5, 1_500) do
-        {:ok, {_, _, packet}} -> {:reply, packet, state}
-        _ -> {:reply, <<>>, state}
+    def read(socket) do
+      case :gen_udp.recv(socket, 5, 1_500) do
+        {:ok, {_, _, packet}} -> packet
+        _ -> <<>>
       end
-    end
-
-    def handle_call(:port, _from, state) do
-      {:reply, state.port, state}
-    end
-
-    def send(pid, host, port, packet) do
-      GenServer.cast(pid, {:send, host, port, packet})
-    end
-
-    def read(pid) do
-      GenServer.call(pid, :read)
-    end
-
-    def port(pid) do
-      GenServer.call(pid, :port)
     end
   end
 
@@ -61,7 +39,12 @@ defmodule ProlinkConnect do
   defmodule Iface do
     def find(name) do
       {:ok, interfaces} = :inet.getifaddrs()
-      interfaces |> Enum.filter(fn {iname, opts} -> iname == name end) |> List.first()
+      found = interfaces |> Enum.filter(&(elem(&1, 0) |> to_string == name))
+
+      case found do
+        [iface] -> {:ok, iface}
+        [] -> {:error, "No interface found with name #{name}"}
+      end
     end
 
     def broadcast_addr({name, opts}) do
@@ -107,11 +90,11 @@ defmodule ProlinkConnect do
 
     def parse_cdj_status(
           <<name::binary-size(20), 0x1, _subtype, _device_number, _length::binary-size(2),
-            channel, 0x0, 0x0, is_active, _track_loaded_on_device, _track_loaded_on_slot,
-            _track_type, 0x0, rekordbox::binary-size(4), rest::binary>>
+            channel, 0x0, 0x0, _activity, _track_loaded_on_device, _track_loaded_on_slot,
+            _track_type, 0x0, rekordbox::binary-size(4), _gargabe::binary-size(87), status,
+            rest::binary>>
         ) do
-      IO.inspect(rest)
-      %{is_active: is_active, channel: channel, rekordbox: rekordbox}
+      %{status: status, channel: channel, rekordbox: rekordbox}
     end
 
     def create_keep_alive(iface, device_name, channel) do
@@ -137,133 +120,120 @@ defmodule ProlinkConnect do
     end
   end
 
-  defmodule VCDJ do
-    use GenServer
-
-    def init(state), do: {:ok, state}
-
-    def start_link(state \\ %{}) do
-      GenServer.start_link(__MODULE__, state)
-    end
-
-    def handle_cast(:send_keep_alives, state) do
-      Socket.send(
-        state.announcements_socket,
-        state.iface |> Iface.broadcast_addr(),
-        Socket.port(state.announcements_socket),
-        Packet.create_keep_alive(state.iface, state.device_name, state.channel)
-      )
-
-      Process.send_after(self(), :send_keep_alives, 1_500)
-      {:noreply, state}
-    end
-
-    def handle_cast(:read_status, state) do
-      packet = Socket.read(state.details_socket)
-
-      Process.send_after(self(), :read_status, 200)
-
-      case Packet.parse(packet) do
-        {:cdj_status, status} ->
-          new_status =
-            Map.put(
-              state.devices_status,
-              status.channel,
-              status
-            )
-
-          IO.inspect(new_status)
-          {:noreply, %{state | devices_status: new_status}}
-
-        _ ->
-          {:noreply, state}
-      end
-    end
-
-    def handle_info(:send_keep_alives, state) do
-      GenServer.cast(self(), :send_keep_alives)
-      {:noreply, state}
-    end
-
-    def handle_info(:read_status, state) do
-      GenServer.cast(self(), :read_status)
-      {:noreply, state}
-    end
-
-    def connect(pid) do
-      GenServer.cast(pid, :send_keep_alives)
-      GenServer.cast(pid, :read_status)
-    end
+  @impl true
+  def init(env) do
+    {:ok, env}
   end
 
-  defmodule DeviceFinder do
-    use GenServer
+  def start_link(opts \\ [iface: "en4", vcdj_name: "VCDJ-V0.1", vcdj_channel: 4]) do
+    {:ok, announcements_socket} = Socket.open(50_000)
+    {:ok, sync_socket} = Socket.open(50_001)
+    {:ok, details_socket} = Socket.open(50_002)
+    {:ok, iface} = Keyword.fetch!(opts, :iface) |> Iface.find()
 
-    def init(state), do: {:ok, state}
-
-    def start_link(state \\ %{}) do
-      GenServer.start_link(__MODULE__, state)
-    end
-
-    def handle_info(:start, state) do
-      {:noreply, loop(state)}
-    end
-
-    def handle_call(:query, _from, state) do
-      {:reply, state.devices, state}
-    end
-
-    defp loop(%{devices: devices, socket: socket}) do
-      packet = Socket.read(socket)
-
-      Process.send_after(self(), :start, 500)
-
-      case Packet.parse(packet) do
-        {:keep_alive, device} ->
-          new_devices =
-            Map.update(
-              devices,
-              device.ip,
-              device,
-              &%{&1 | last_received: Time.utc_now()}
-            )
-
-          %{devices: new_devices, socket: socket}
-
-        _ ->
-          %{devices: devices, socket: socket}
-      end
-    end
-
-    def start(pid) when is_pid(pid), do: send(pid, :start)
-    def query(pid), do: GenServer.call(pid, :query)
-  end
-
-  def start() do
-    {:ok, announcements_socket} = Socket.start_link(50_000)
-    {:ok, sync_channel} = Socket.start_link(50_001)
-    {:ok, details_socket} = Socket.start_link(50_002)
-
-    device_finder = %{
-      devices: %{},
-      socket: announcements_socket
-    }
-
-    {:ok, finder_pid} = DeviceFinder.start_link(device_finder)
-    DeviceFinder.start(finder_pid)
-
-    vcdj = %{
-      device_name: "Hello Seahorse",
-      iface: Iface.find('en4'),
-      channel: 4,
-      devices_status: %{},
+    state = %{
       announcements_socket: announcements_socket,
-      details_socket: details_socket
+      sync_socket: sync_socket,
+      details_socket: details_socket,
+      devices: %{},
+      status: %{},
+      iface: iface,
+      vcdj: %{
+        name: Keyword.fetch!(opts, :vcdj_name),
+        channel: Keyword.fetch!(opts, :vcdj_channel)
+      }
     }
 
-    {:ok, cdj} = VCDJ.start_link(vcdj)
-    VCDJ.connect(cdj)
+    GenServer.start_link(__MODULE__, state, name: __MODULE__)
+  end
 
-    {:ok, finder_pid, cdj}
+  def handle_call(:query, _from, state) do
+    {:reply, state.status, state}
+  end
+
+  def handle_call(:watch, _from, state) do
+    {:ok, {:interval, watcher}} = :timer.send_interval(1_500, __MODULE__, :watch)
+    new_state = Map.put(state, :watcher, watcher)
+    {:reply, watcher, new_state}
+  end
+
+  def handle_info(:watch, state) do
+    packet = Socket.read(state.announcements_socket)
+    devices = Map.fetch!(state, :devices)
+
+    case Packet.parse(packet) do
+      {:keep_alive, device} ->
+        new_devices =
+          Map.update(
+            devices,
+            device.channel,
+            device,
+            &%{&1 | last_received: Time.utc_now()}
+          )
+
+        {:noreply, %{state | devices: new_devices}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_call(:connect, _from, state) do
+    {:ok, {:interval, keep_alives}} = :timer.send_interval(1_500, __MODULE__, :send_keep_alives)
+    {:ok, {:interval, status_reads}} = :timer.send_interval(200, __MODULE__, :read_status)
+    new_state = Map.put(state, :keep_alives, keep_alives)
+    new_state = Map.put(new_state, :status_reads, status_reads)
+    {:reply, :ok, new_state}
+  end
+
+  def handle_call(:stop, _from, state) do
+    state.watcher |> :timer.cancel()
+    {:reply, state, state}
+  end
+
+  def handle_info(:send_keep_alives, state) do
+    Socket.send(
+      state.announcements_socket,
+      state.iface |> Iface.broadcast_addr(),
+      50_000,
+      Packet.create_keep_alive(state.iface, state.vcdj.name, state.vcdj.channel)
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info(:read_status, state) do
+    packet = Socket.read(state.details_socket)
+
+    case Packet.parse(packet) do
+      {:cdj_status, status} ->
+        new_status =
+          Map.put(
+            state.status,
+            status.channel,
+            status
+          )
+
+        {:noreply, %{state | status: new_status}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def query() do
+    GenServer.call(__MODULE__, :query)
+  end
+
+  def watch() do
+    GenServer.call(__MODULE__, :watch)
+  end
+
+  def connect() do
+    GenServer.call(__MODULE__, :connect)
+  end
+
+  def stop() do
+    GenServer.call(__MODULE__, :stop)
   end
 end
