@@ -14,7 +14,9 @@ defmodule ProlinkConnect.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger],
+      env: [iface: "en4", vcdj_name: "VCJD-V0.1", vcdj_channel: 4],
+      mod: {ProlinkConnect.Application, []}
     ]
   end
 
