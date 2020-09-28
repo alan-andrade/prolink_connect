@@ -3,7 +3,7 @@ defmodule ProlinkConnect.Watcher do
 
   def init(_) do
     {:ok, {:interval, devices}} = :timer.send_interval(1_500, __MODULE__, :watch_devices)
-    {:ok, {:interval, status}} = :timer.send_interval(200, __MODULE__, :watch_status)
+    {:ok, {:interval, status}} = :timer.send_interval(50, __MODULE__, :watch_status)
     {:ok, %{devices: devices, status: status}}
   end
 

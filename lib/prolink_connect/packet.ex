@@ -17,19 +17,34 @@ defmodule ProlinkConnect.Packet do
     {:error, e}
   end
 
-  def parse_keep_alive(
-        <<0x0, name::binary-size(20), 0x1, _remainder, _length::binary-size(2), channel,
-          device_type, _mac::binary-size(6), ip::binary-size(4), _rest::binary>>
-      ) do
+  def parse_keep_alive(<<0x0, name::binary-size(20), rest::binary>>) do
+    channel = :binary.at(rest, 0x04)
+    device_type = :binary.at(rest, 0x05)
+    ip = :binary.bin_to_list(rest, {0x06, 6})
+
     ProlinkConnect.Device.new(name, device_type, ip, channel)
   end
 
-  def parse_cdj_status(
-        <<name::binary-size(20), 0x1, _subtype, _device_number, _length::binary-size(2), channel,
-          0x0, 0x0, _activity, _track_loaded_on_device, _track_loaded_on_slot, _track_type, 0x0,
-          rekordbox::binary-size(4), _gargabe::binary-size(87), status, rest::binary>>
-      ) do
-    %{status: status, channel: channel, rekordbox: rekordbox}
+  def parse_cdj_status(<<name::binary-size(20), 0x1, rest::binary>>) do
+    channel = :binary.at(rest, 0x1)
+    status = Integer.to_string(:binary.at(rest, 0x69), 16)
+    isMaster = :binary.at(rest, 0x7E)
+    rekordbox = :binary.bin_to_list(rest, {0x70, 4})
+
+    if channel == 1 do
+      rest
+      |> :binary.bin_to_list()
+      |> Enum.map(&Integer.to_string(&1, 16))
+      |> Enum.map(&String.pad_trailing(&1, 4))
+      |> Enum.map(&"#{&1},")
+      |> Enum.chunk_every(16)
+      |> Enum.join("\n")
+      |> IO.puts()
+
+      IO.puts("–––––––––––––")
+    end
+
+    %{status: status, channel: channel, rekordbox: rekordbox, isMaster: isMaster}
   end
 
   def create_keep_alive(iface, device_name, channel) do
