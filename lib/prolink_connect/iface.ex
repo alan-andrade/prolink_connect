@@ -9,17 +9,17 @@ defmodule ProlinkConnect.Iface do
     end
   end
 
-  def broadcast_addr({name, opts}) do
+  def broadcast_addr({_, opts}) do
     opts[:broadaddr]
   end
 
-  def hwaddr({name, opts}) do
+  def hwaddr({_, opts}) do
     opts[:hwaddr]
     |> Enum.map(&(&1 |> :binary.encode_unsigned()))
     |> Enum.join()
   end
 
-  def ipv4addr({name, opts}) do
+  def ipv4addr({_, opts}) do
     Keyword.get_values(opts, :addr)
     |> List.last()
     |> Tuple.to_list()

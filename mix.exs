@@ -15,7 +15,6 @@ defmodule ProlinkConnect.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      env: [iface: "en4", vcdj_name: "VCJD-V0.1", vcdj_channel: 4],
       mod: {ProlinkConnect.Application, []}
     ]
   end

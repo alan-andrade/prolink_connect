@@ -1,4 +1,6 @@
 defmodule ProlinkConnect.Packet do
+  require Logger
+
   @header <<0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6D, 0x4A, 0x4F, 0x4C>>
 
   def parse(<<@header, 0x6, rest::binary>>) do
@@ -9,7 +11,7 @@ defmodule ProlinkConnect.Packet do
     {:cdj_status, rest |> parse_cdj_status}
   end
 
-  def parse(<<@header, packet_type, rest::binary>>) do
+  def parse(<<@header, _packet_type, rest::binary>>) do
     {:not_implemented, rest}
   end
 
@@ -22,10 +24,10 @@ defmodule ProlinkConnect.Packet do
     device_type = :binary.at(rest, 0x05)
     ip = :binary.bin_to_list(rest, {0x06, 6})
 
-    ProlinkConnect.Device.new(name, device_type, ip, channel)
+    %{name: name, device_type: device_type, ip: ip, channel: channel}
   end
 
-  def parse_cdj_status(<<name::binary-size(20), 0x1, rest::binary>>) do
+  def parse_cdj_status(<<_name::binary-size(20), 0x1, rest::binary>>) do
     channel = :binary.at(rest, 0x1)
     status = Integer.to_string(:binary.at(rest, 0x69), 16)
     isMaster = :binary.at(rest, 0x7E)
@@ -39,9 +41,7 @@ defmodule ProlinkConnect.Packet do
       |> Enum.map(&"#{&1},")
       |> Enum.chunk_every(16)
       |> Enum.join("\n")
-      |> IO.puts()
-
-      IO.puts("–––––––––––––")
+      |> Logger.debug()
     end
 
     %{status: status, channel: channel, rekordbox: rekordbox, isMaster: isMaster}

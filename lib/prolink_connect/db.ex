@@ -1,12 +1,17 @@
 defmodule ProlinkConnect.DB do
+  require Logger
   use GenServer
-
-  def init(_) do
-    {:ok, %{devices: %{}, status: %{}}}
-  end
 
   def start_link(state) do
     GenServer.start_link(__MODULE__, state, name: __MODULE__)
+  end
+
+  def init(state) do
+    {:ok, state}
+  end
+
+  def query() do
+    GenServer.call(__MODULE__, :query)
   end
 
   def update({:keep_alive, device}) do
@@ -17,14 +22,19 @@ defmodule ProlinkConnect.DB do
     GenServer.cast(__MODULE__, {:update, {:status, status}})
   end
 
-  def update(_) do
-    IO.puts("Unexpected update intent")
+  def update(msg) do
+    Logger.error("Unexpected update intent")
+    Logger.error(msg)
   end
 
-  def handle_cast({:update, {:keep_alive, device}}, state) do
+  def handle_call(:query, _from, state) do
+    {:reply, state, state}
+  end
+
+  def handle_cast({:update, {:keep_alive, device}}, state = %{devices: devices}) do
     {
       :noreply,
-      %{state | devices: Map.put(state.devices, device.channel, device)}
+      %{state | devices: Map.put(devices, device.channel, device)}
     }
   end
 

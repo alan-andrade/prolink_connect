@@ -1,43 +1,21 @@
 defmodule ProlinkConnect.VCDJ do
   use GenServer
 
-  def init(_) do
-    {:ok, iface} = iface()
-    {:ok, {:interval, interval}} = :timer.send_interval(1_500, __MODULE__, :send_keep_alives)
-    {:ok, %{name: vcdj_name(), channel: vcdj_channel(), iface: iface, interval: interval}}
+  def start_link(state) do
+    GenServer.start_link(__MODULE__, state, name: __MODULE__)
   end
 
-  def start_link(cdj) do
-    GenServer.start_link(__MODULE__, cdj, name: __MODULE__)
+  def init(cdj) do
+    {:ok, cdj, {:continue, :boot}}
   end
 
-  defp iface() do
-    read_env(:iface) |> ProlinkConnect.Iface.find()
-  end
-
-  defp vcdj_name do
-    read_env(:vcdj_name)
-  end
-
-  defp vcdj_channel do
-    read_env(:vcdj_channel)
-  end
-
-  defp read_env(key) do
-    Application.fetch_env!(:prolink_connect, key)
+  def handle_continue(:boot, state) do
+    {:ok, {:interval, interval}} = :timer.send_interval(1_400, __MODULE__, :send_keep_alives)
+    {:noreply, Map.put(state, :interval, interval)}
   end
 
   def handle_info(:send_keep_alives, cdj) do
-    ProlinkConnect.Network.send(
-      cdj.iface |> ProlinkConnect.Iface.broadcast_addr(),
-      50_000,
-      keep_alive_packet(cdj)
-    )
-
+    cdj.send_keep_alives.()
     {:noreply, cdj}
-  end
-
-  def keep_alive_packet(cdj) do
-    ProlinkConnect.Packet.create_keep_alive(cdj.iface, cdj.name, cdj.channel)
   end
 end
