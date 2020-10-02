@@ -7,8 +7,8 @@ defmodule ProlinkConnect.Socket do
     :gen_udp.send(socket, host, port(socket), packet)
   end
 
-  def read(socket) do
-    case :gen_udp.recv(socket, 1, 1_500) do
+  def read(socket, timeout \\ 500) do
+    case :gen_udp.recv(socket, 0, timeout) do
       {:ok, {_, _, packet}} -> {:ok, packet}
       {:error, error} -> {:error, error}
     end
