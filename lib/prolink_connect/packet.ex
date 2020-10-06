@@ -3,53 +3,78 @@ defmodule ProlinkConnect.Packet do
 
   @header <<0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6D, 0x4A, 0x4F, 0x4C>>
 
-  def parse(<<@header, 0x6, rest::binary>>) do
-    rest |> parse_keep_alive
-  end
+  @keep_alive [
+    {:name, :parse_string, [0x0C, 20]},
+    {:channel, :parse_int, 0x24},
+    {:device_type, :parse_int, 0x25},
+    {:ip, :parse_ip, [0x2C, 4]}
+  ]
 
-  def parse(<<@header, 0x0A, rest::binary>>) do
-    rest |> parse_cdj_status
-  end
+  @cdj_status [
+    {:channel, :parse_int, 0x21},
+    {:status, :parse_int, 0x89},
+    {:is_master, :parse_int, 0x9E},
+    {:rekordbox_id, :parse_list, [0x2C, 4]}
+  ]
 
-  def parse(_packet) do
-    {:error, :packet_unkown}
-  end
+  @parsing_rules %{
+    0x06 => @keep_alive,
+    0x0A => @cdj_status
+  }
 
-  def parse_keep_alive(<<0x0, name::binary-size(20), rest::binary>>) do
-    channel = :binary.at(rest, 0x04)
-    device_type = :binary.at(rest, 0x05)
-    ip = :binary.bin_to_list(rest, {0x06, 6})
-
-    {:ok, %{channel: channel, name: clean(name), device_type: device_type, ip: ip}}
-  end
-
-  def parse_keep_alive(_) do
-    {:error, :packet_unkown}
-  end
-
-  def parse_cdj_status(<<_name::binary-size(20), 0x1, rest::binary>>) do
-    channel = :binary.at(rest, 0x1)
-    status = Integer.to_string(:binary.at(rest, 0x69), 16)
-    isMaster = :binary.at(rest, 0x7E)
-    rekordbox = :binary.bin_to_list(rest, {0x70, 4})
-
-    if channel == 1 do
-      rest
-      |> :binary.bin_to_list()
-      |> Enum.map(&Integer.to_string(&1, 16))
-      |> Enum.map(&String.pad_trailing(&1, 4))
-      |> Enum.map(&"#{&1},")
-      |> Enum.chunk_every(16)
-      |> Enum.join("\n")
-      |> Logger.debug()
+  def parse(packet) do
+    with {:ok, type} <- get_packet_type(packet),
+         {:ok, rules} <- get_parsing_rules(type) do
+      {:ok, apply_rules(rules, packet)}
+    else
+      :error -> {:error, :no_packet_rule}
+      {:error, error} -> {:error, error}
     end
-
-    {:ok, %{status: status, channel: channel, rekordbox: rekordbox, isMaster: isMaster}}
   end
 
-  def parse_cdj_status(_) do
-    {:error, :packet_unkown}
+  defp get_rule_name(rule), do: elem(rule, 0)
+  defp get_rule_method(rule), do: elem(rule, 1)
+  defp get_rule_position(rule), do: List.flatten([elem(rule, 2)])
+
+  defp get_parsing_rules(packet_type) when is_number(packet_type) do
+    Map.fetch(@parsing_rules, packet_type)
   end
+
+  defp get_parsing_rules(_), do: {:error, "packet type not supported"}
+  defp get_packet_type(<<@header, packet_type, _rest::binary>>), do: {:ok, packet_type}
+  defp get_packet_type(_), do: {:error, "Unkown type"}
+
+  defp apply_rules(rules, packet) when is_binary(packet) do
+    Enum.reduce(
+      rules,
+      %{},
+      fn rule, acc ->
+        key = get_rule_name(rule)
+        method = get_rule_method(rule)
+        position = get_rule_position(rule)
+
+        data = apply(__MODULE__, method, [packet | position])
+        Map.put(acc, key, data)
+      end
+    )
+  end
+
+  def parse_string(packet, position, length) do
+    parse_list(packet, position, length)
+    |> Enum.filter(&(&1 != 0))
+    |> to_string
+  end
+
+  def parse_int(packet, position) do
+    :binary.at(packet, position)
+  end
+
+  def parse_ip(packet, position, length) do
+    parse_list(packet, position, length)
+    |> :erlang.list_to_tuple()
+  end
+
+  def parse_list(packet, position, length), do: :binary.bin_to_list(packet, {position, length})
 
   def create_keep_alive(iface, device_name, channel) do
     mac = iface |> ProlinkConnect.Iface.hwaddr()
@@ -65,9 +90,5 @@ defmodule ProlinkConnect.Packet do
     p = [p, ip]
     p = [p, <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>]
     p
-  end
-
-  defp clean(bitstring) do
-    bitstring |> to_charlist |> Enum.filter(&(&1 != 0)) |> to_string
   end
 end

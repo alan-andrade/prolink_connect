@@ -1,35 +1,28 @@
 defmodule ProlinkConnect.Status do
-  alias ProlinkConnect.{Socket, Packet}
+  alias ProlinkConnect.Packet
 
   use GenServer
 
   @port 50_002
 
   def start_link(_) do
-    {:ok, socket} = Socket.open(@port)
-
-    state = %{
-      socket: socket,
-      channels: %{}
-    }
-
-    GenServer.start_link(__MODULE__, state, name: __MODULE__)
+    GenServer.start_link(__MODULE__, %{channels: %{}}, name: __MODULE__)
   end
 
   def init(state) do
-    {:ok, state, {:continue, :start_listening}}
+    {:ok, socket} =
+      :gen_udp.open(@port, [:binary, {:broadcast, true}, {:dontroute, true}, {:active, true}])
+
+    {
+      :gen_udp.controlling_process(socket, self()),
+      state
+    }
   end
 
   def query, do: GenServer.call(__MODULE__, :query)
 
-  def handle_continue(:start_listening, state) do
-    {:ok, {:interval, timer}} = :timer.send_interval(50, __MODULE__, :listen)
-    {:noreply, Map.put(state, :timer, timer)}
-  end
-
-  def handle_info(:listen, %{socket: socket} = state) do
-    with {:ok, packet} <- Socket.read(socket, 40),
-         {:ok, status} <- Packet.parse(packet) do
+  def handle_info({:udp, _socket, _ip, _port, packet}, state) do
+    with {:ok, status} <- Packet.parse(packet) do
       updated_channels =
         Map.put(
           state.channels,
@@ -39,9 +32,12 @@ defmodule ProlinkConnect.Status do
 
       {:noreply, Map.put(state, :channels, updated_channels)}
     else
-      {:error, :timeout} -> {:noreply, state}
-      {:error, :packet_unkown} -> {:noreply, state}
-      {:error, error} -> raise(error)
+      {:error, :timeout} ->
+        {:noreply, state}
+
+      {:error, error} ->
+        IO.inspect(error)
+        {:noreply, state}
     end
   end
 

@@ -1,5 +1,5 @@
 defmodule ProlinkConnect.Presence do
-  alias ProlinkConnect.{Socket, Packet, Iface}
+  alias ProlinkConnect.{Packet, Iface}
 
   use GenServer
 
@@ -13,14 +13,11 @@ defmodule ProlinkConnect.Presence do
       channel: Application.fetch_env!(:prolink_connect, :cdj_channel)
     }
 
-    {:ok, socket} = Socket.open(@port)
-
     GenServer.start_link(
       __MODULE__,
       %{
         iface: iface,
         vcdj: vcdj,
-        socket: socket,
         devices: %{}
       },
       name: __MODULE__
@@ -28,20 +25,25 @@ defmodule ProlinkConnect.Presence do
   end
 
   def init(state) do
-    {:ok, state, {:continue, :start_listening}}
+    {:ok, socket} =
+      :gen_udp.open(@port, [:binary, {:broadcast, true}, {:dontroute, true}, {:active, true}])
+
+    {
+      :gen_udp.controlling_process(socket, self()),
+      Map.put(state, :socket, socket),
+      {:continue, :start_broadcasting}
+    }
   end
 
   def query, do: GenServer.call(__MODULE__, :query)
 
-  def handle_continue(:start_listening, state) do
-    {:ok, {:interval, timer1}} = :timer.send_interval(1_500, __MODULE__, :listen)
-    {:ok, {:interval, timer2}} = :timer.send_interval(1_500, __MODULE__, :broadcast)
-    {:noreply, state |> Map.put(:timers, [timer1, timer2])}
+  def handle_continue(:start_broadcasting, state) do
+    {:ok, {:interval, timer}} = :timer.send_interval(1_500, __MODULE__, :broadcast)
+    {:noreply, state |> Map.put(:timers, [timer])}
   end
 
-  def handle_info(:listen, %{socket: socket} = state) do
-    with {:ok, packet} <- Socket.read(socket, 1_400),
-         {:ok, device} <- Packet.parse(packet) do
+  def handle_info({:udp, _socket, _ip, _port, packet}, state) do
+    with {:ok, device} <- Packet.parse(packet) do
       new_devices =
         Map.put(
           state.devices,
@@ -51,15 +53,15 @@ defmodule ProlinkConnect.Presence do
 
       {:noreply, Map.put(state, :devices, new_devices)}
     else
-      {:error, :timeout} -> {:noreply, state}
-      {:error, :packet_unkown} -> {:noreply, state}
-      {:error, error} -> raise(error)
+      {:error, error} ->
+        IO.inspect(error)
+        {:noreply, state}
     end
   end
 
   def handle_info(:broadcast, %{socket: socket, iface: iface, vcdj: vcdj} = state) do
     packet = Packet.create_keep_alive(iface, vcdj.name, vcdj.channel)
-    Socket.send(socket, Iface.broadcast_addr(iface), packet)
+    :gen_udp.send(socket, Iface.broadcast_addr(iface), @port, packet)
     {:noreply, state}
   end
 
