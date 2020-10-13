@@ -12,8 +12,10 @@ defmodule ProlinkConnect.Packet do
 
   @cdj_status [
     {:channel, :parse_int, 0x21},
+    # 228, 164
     {:status, :parse_int, 0x89},
     {:is_master, :parse_int, 0x9E},
+    {:slot, :parse_int, 0x29},
     {:rekordbox_id, :parse_list, [0x2C, 4]}
   ]
 
@@ -91,4 +93,20 @@ defmodule ProlinkConnect.Packet do
     p = [p, <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>]
     p
   end
+
+  def diff(old, new) when is_map(old) and is_map(new) do
+    Map.keys(new)
+    |> Enum.reduce(%{}, fn key, acc ->
+      old_value = Map.get(old, key)
+      new_value = Map.get(new, key)
+
+      if new_value !== old_value do
+        Map.merge(acc, %{key => new_value})
+      else
+        acc
+      end
+    end)
+  end
+
+  def diff(_, _), do: %{}
 end

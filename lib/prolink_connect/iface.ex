@@ -1,12 +1,11 @@
 defmodule ProlinkConnect.Iface do
-  def find! do
-    name = Application.fetch_env!(:prolink_connect, :iface_name)
+  def find!(name) do
     {:ok, interfaces} = :inet.getifaddrs()
     found = interfaces |> Enum.filter(&(elem(&1, 0) |> to_string == name))
 
     case found do
       [iface] -> iface
-      [] -> throw("No interface found with name #{name}")
+      [] -> raise("No interface found with name #{name}")
     end
   end
 

@@ -3,17 +3,19 @@ defmodule ProlinkConnect.Rekordbox do
   alias ProlinkConnect.Status
 
   def start_link(_) do
-    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
+    GenServer.start_link(__MODULE__, %{})
   end
 
   @impl true
-  def init(_) do
-    init_port()
+  def init(state) do
+    {:ok, state}
   end
 
-  defp init_port do
+  def handle_call({:track_info, status}, _from, state) do
   end
 
-  def track_info(track) do
+  def get_track_metadata(status) do
+    # Can this spawn another function to fetch the things ?
+    GenServer.call(__MODULE__, {:track_info, status})
   end
 end
