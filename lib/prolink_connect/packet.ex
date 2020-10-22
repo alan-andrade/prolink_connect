@@ -1,6 +1,8 @@
 defmodule ProlinkConnect.Packet do
   require Logger
 
+  alias ProlinkConnect.Iface
+
   @header <<0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6D, 0x4A, 0x4F, 0x4C>>
 
   @keep_alive [
@@ -27,7 +29,7 @@ defmodule ProlinkConnect.Packet do
   def parse(packet) do
     with {:ok, type} <- get_packet_type(packet),
          {:ok, rules} <- get_parsing_rules(type) do
-      {:ok, apply_rules(rules, packet)}
+      {:ok, parse_packet_with_rules(rules, packet)}
     else
       :error -> {:error, :no_packet_rule}
       {:error, error} -> {:error, error}
@@ -46,7 +48,7 @@ defmodule ProlinkConnect.Packet do
   defp get_packet_type(<<@header, packet_type, _rest::binary>>), do: {:ok, packet_type}
   defp get_packet_type(_), do: {:error, "Unkown type"}
 
-  defp apply_rules(rules, packet) when is_binary(packet) do
+  defp parse_packet_with_rules(rules, packet) when is_binary(packet) do
     Enum.reduce(
       rules,
       %{},
@@ -79,8 +81,9 @@ defmodule ProlinkConnect.Packet do
   def parse_list(packet, position, length), do: :binary.bin_to_list(packet, {position, length})
 
   def create_keep_alive(iface, device_name, channel) do
-    mac = iface |> ProlinkConnect.Iface.hwaddr()
-    ip = iface |> ProlinkConnect.Iface.ipv4addr()
+    address = iface |> Iface.broadcast_addr()
+    mac = iface |> Iface.hwaddr()
+    ip = iface |> Iface.ipv4addr()
 
     p = @header
     p = [p, <<0x6, 0x0>>]
@@ -91,7 +94,7 @@ defmodule ProlinkConnect.Packet do
     p = [p, mac]
     p = [p, ip]
     p = [p, <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>]
-    p
+    {address, p}
   end
 
   def diff(old, new) when is_map(old) and is_map(new) do

@@ -3,7 +3,8 @@ defmodule ProlinkConnect.Application do
 
   def start(_, _) do
     children = [
-      ProlinkConnect.VCDJ
+      ProlinkConnect.Network,
+      ProlinkConnect.VCDJ.Connect
     ]
 
     # Spliting the code into servers that listen to a specific
