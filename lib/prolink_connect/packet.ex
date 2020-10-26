@@ -18,7 +18,7 @@ defmodule ProlinkConnect.Packet do
     {:status, :parse_int, 0x89},
     {:is_master, :parse_int, 0x9E},
     {:slot, :parse_int, 0x29},
-    {:rekordbox_id, :parse_list, [0x2C, 4]}
+    {:track_id, :parse_list, [0x2C, 4]}
   ]
 
   @parsing_rules %{

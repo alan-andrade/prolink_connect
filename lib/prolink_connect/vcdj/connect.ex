@@ -7,7 +7,7 @@ defmodule ProlinkConnect.VCDJ.Connect do
     GenServer.start_link(__MODULE__, {}, name: __MODULE__)
   end
 
-  def init(state) do
+  def init(_) do
     {:ok, {:interval, timer}} = :timer.send_interval(1_500, __MODULE__, :broadcast)
     {:ok, {timer}}
   end

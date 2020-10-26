@@ -4,7 +4,8 @@ defmodule ProlinkConnect.Application do
   def start(_, _) do
     children = [
       ProlinkConnect.Network,
-      ProlinkConnect.VCDJ.Connect
+      ProlinkConnect.VCDJ.Connect,
+      ProlinkConnect.Rekordbox
     ]
 
     # Spliting the code into servers that listen to a specific

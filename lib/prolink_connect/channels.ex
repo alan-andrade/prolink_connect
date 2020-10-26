@@ -1,4 +1,4 @@
-defmodule ProlinkConnect.Devices do
+defmodule ProlinkConnect.Channels do
   def new(), do: %{}
 
   def add_device(state, channel, device, timestamp \\ Time.utc_now()) do
