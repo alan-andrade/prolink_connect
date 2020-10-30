@@ -1,13 +1,11 @@
 defmodule ProlinkConnect.Packet do
-  require Logger
-
   alias ProlinkConnect.Iface
 
   @header <<0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6D, 0x4A, 0x4F, 0x4C>>
 
   @keep_alive [
-    {:name, :parse_string, [0x0C, 20]},
     {:channel, :parse_int, 0x24},
+    {:name, :parse_string, [0x0C, 20]},
     {:device_type, :parse_int, 0x25},
     {:ip, :parse_ip, [0x2C, 4]}
   ]
@@ -22,14 +20,14 @@ defmodule ProlinkConnect.Packet do
   ]
 
   @parsing_rules %{
-    0x06 => @keep_alive,
-    0x0A => @cdj_status
+    0x06 => {:keep_alive, @keep_alive},
+    0x0A => {:cdj_status, @cdj_status}
   }
 
   def parse(packet) do
     with {:ok, type} <- get_packet_type(packet),
-         {:ok, rules} <- get_parsing_rules(type) do
-      {:ok, parse_packet_with_rules(rules, packet)}
+         {:ok, {name, rules}} <- get_parsing_rules(type) do
+      {:ok, name, parse_packet_with_rules(rules, packet)}
     else
       :error -> {:error, :no_packet_rule}
       {:error, error} -> {:error, error}
@@ -96,20 +94,4 @@ defmodule ProlinkConnect.Packet do
     p = [p, <<0x01, 0x00, 0x00, 0x00, 0x01, 0x00>>]
     {address, p}
   end
-
-  def diff(old, new) when is_map(old) and is_map(new) do
-    Map.keys(new)
-    |> Enum.reduce(%{}, fn key, acc ->
-      old_value = Map.get(old, key)
-      new_value = Map.get(new, key)
-
-      if new_value !== old_value do
-        Map.merge(acc, %{key => new_value})
-      else
-        acc
-      end
-    end)
-  end
-
-  def diff(_, _), do: %{}
 end

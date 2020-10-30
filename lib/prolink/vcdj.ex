@@ -1,9 +1,9 @@
 defmodule ProlinkConnect.VCDJ do
   alias ProlinkConnect.{Iface, Packet}
 
-  @name Application.fetch_env!(:prolink_connect, :cdj_name)
-  @channel Application.fetch_env!(:prolink_connect, :cdj_channel)
-  @iface_name Application.fetch_env!(:prolink_connect, :iface_name)
+  @name Application.fetch_env!(:prolink, :cdj_name)
+  @channel Application.fetch_env!(:prolink, :cdj_channel)
+  @iface_name Application.fetch_env!(:prolink, :iface_name)
   @iface Iface.find!(@iface_name)
   @keep_alive Packet.create_keep_alive(@iface, @name, @channel)
 
